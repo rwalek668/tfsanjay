@@ -1,6 +1,6 @@
 #include <iostream>
 #include <stdint.h>
-
+#include <stdio.h>
 
 /*
 enum Piece
@@ -41,6 +41,7 @@ struct Pair {
 };
 
 __constant__ Board bad_board = {empty};
+Board bad_board_host = {empty};
 
 #define USE_GPU 1
 #if USE_GPU
@@ -76,12 +77,27 @@ __device__ bool boardEquality(const Board *a, const Board*b)
 	}
 	return true;
 }
+bool boardEqualityHost(const Board *a, const Board*b)
+{
+	for(int x = 0; x < 4; x++)
+	{
+		for(int y = 0; y < 8; y++)
+		{
+			if(a->pieces[x][y] != b->pieces[x][y])
+			{
+				return false;
+			}
+		}
+	}
+	return true;
+}
 __global__ void analyze_tree(Board * input, int moves){
 	int max = 0;
 }
 
 __global__ void expand(Board * input, Board * output, int len) {
-	__shared__ Board B[500]; //TODO
+	const int shared_size = 496;
+	__shared__ Board B[shared_size];
 	unsigned int tx = threadIdx.x;
 	unsigned int blockNum = blockIdx.x+blockIdx.y*gridDim.x;
 	
@@ -89,18 +105,22 @@ __global__ void expand(Board * input, Board * output, int len) {
 	{
 		B[0] = input[blockNum];
 	}
-	else if (blockNum < len)
+	else if (blockNum < len && tx < shared_size)
 	{
 		B[tx] = bad_board;
 	}	
 	__syncthreads();
-	if(boardEquality(&B[tx], &bad_board))
+	if(tx == 0 && ~boardEquality(&B[tx], &bad_board))
 		makeMoves(B, white, tx);
 	__syncthreads();
-	if(boardEquality(&B[tx], &bad_board))
+	if(tx < shared_size && ~boardEquality(&B[tx], &bad_board))
 		makeMoves(B, black, tx);
 	__syncthreads();
 
+	if (tx < shared_size && blockNum < len)
+		output[blockDim.x*blockNum+tx] = B[tx];
+	else if (blockNum < len)
+		output[blockDim.x*blockNum+tx] = bad_board;
 }
 
 
@@ -109,8 +129,8 @@ __device__
 #endif
 void makeMoves(Board * boards, Turn turn, unsigned int tx)
 {
-
-	if(turn == white)
+	// tx = 0 condition because only the first thread has a valid board to work on.
+	if(turn == white && tx == 0)
 	{
 		int exp_rate = 22;
 		int move_idx = 0;
@@ -291,11 +311,11 @@ void makeMoves(Board * boards, Turn turn, unsigned int tx)
 			}
 		}
 	}
-	else
+	else if (tx < 22)
 	{
 		int move_idx = 0;
-		Board b = boards[tx];
-		Board temp = boards[tx];
+		Board b = boards[tx*22];
+		Board temp = boards[tx*22];
 		for(int x = 0; x < 4; x++)
 		for(int y = 0; y < 8; y++)
 		{
@@ -310,7 +330,7 @@ void makeMoves(Board * boards, Turn turn, unsigned int tx)
 					else
 						temp.pieces[x+1][y-1] = temp.pieces[x][y];
 					temp.pieces[x][y] = empty;
-					boards[tx+move_idx] = temp;
+					boards[22*tx+move_idx] = temp;
 					move_idx++;
 					temp = b;
 				}
@@ -322,7 +342,7 @@ void makeMoves(Board * boards, Turn turn, unsigned int tx)
 					else
 						temp.pieces[x][y-1] = temp.pieces[x][y];
 					temp.pieces[x][y] = empty;
-					boards[tx+move_idx] = temp;
+					boards[22*tx+move_idx] = temp;
 					move_idx++;
 					temp = b;
 				}
@@ -331,7 +351,7 @@ void makeMoves(Board * boards, Turn turn, unsigned int tx)
 					//printf("black at %d,%d move left\n", x, y);
 					temp.pieces[x-1][y-1] = temp.pieces[x][y];
 					temp.pieces[x][y] = empty;
-					boards[tx+move_idx] = temp;
+					boards[22*tx+move_idx] = temp;
 					move_idx++;
 					temp = b;
 				}
@@ -340,7 +360,7 @@ void makeMoves(Board * boards, Turn turn, unsigned int tx)
 					//printf("black at %d,%d move right\n", x, y);
 					temp.pieces[x][y-1] = temp.pieces[x][y];
 					temp.pieces[x][y] = empty;
-					boards[tx+move_idx] = temp;
+					boards[22*tx+move_idx] = temp;
 					move_idx++;
 					temp = b;
 				}
@@ -354,7 +374,7 @@ void makeMoves(Board * boards, Turn turn, unsigned int tx)
 						temp.pieces[x+1][y-2] = white_king;
 					temp.pieces[x][y] = empty;
 					temp.pieces[x+1][y-1] = empty;
-					boards[tx+move_idx] = temp;
+					boards[22*tx+move_idx] = temp;
 					move_idx++;
 					temp = b;
 				}
@@ -367,7 +387,7 @@ void makeMoves(Board * boards, Turn turn, unsigned int tx)
 						temp.pieces[x+1][y-2] = white_king;
 					temp.pieces[x][y] = empty;
 					temp.pieces[x][y-1] = empty;
-					boards[tx+move_idx] = temp;
+					boards[22*tx+move_idx] = temp;
 					move_idx++;
 					temp = b;
 				}
@@ -377,7 +397,7 @@ void makeMoves(Board * boards, Turn turn, unsigned int tx)
 					temp.pieces[x-1][y-2] = temp.pieces[x][y];
 					temp.pieces[x][y] = empty;
 					temp.pieces[x-1][y-1] = empty;
-					boards[tx+move_idx] = temp;
+					boards[22*tx+move_idx] = temp;
 					move_idx++;
 					temp = b;
 				}
@@ -387,7 +407,7 @@ void makeMoves(Board * boards, Turn turn, unsigned int tx)
 					temp.pieces[x+1][y-2] = temp.pieces[x][y];
 					temp.pieces[x][y] = empty;
 					temp.pieces[x][y-1] = empty;
-					boards[tx+move_idx] = temp;
+					boards[22*tx+move_idx] = temp;
 					move_idx++;
 					temp = b;
 				}
@@ -400,7 +420,7 @@ void makeMoves(Board * boards, Turn turn, unsigned int tx)
 				{
 					temp.pieces[x+1][y+1] = temp.pieces[x][y];
 					temp.pieces[x][y] = empty;
-					boards[tx+move_idx] = temp;
+					boards[22*tx+move_idx] = temp;
 					move_idx++;
 					temp = b;
 				}
@@ -408,7 +428,7 @@ void makeMoves(Board * boards, Turn turn, unsigned int tx)
 				{
 					temp.pieces[x][y+1] = temp.pieces[x][y];
 					temp.pieces[x][y] = empty;
-					boards[tx+move_idx] = temp;
+					boards[22*tx+move_idx] = temp;
 					move_idx++;
 					temp = b;
 				}
@@ -416,7 +436,7 @@ void makeMoves(Board * boards, Turn turn, unsigned int tx)
 				{
 					temp.pieces[x-1][y+1] = temp.pieces[x][y];
 					temp.pieces[x][y] = empty;
-					boards[tx+move_idx] = temp;
+					boards[22*tx+move_idx] = temp;
 					move_idx++;
 					temp = b;
 				}
@@ -424,7 +444,7 @@ void makeMoves(Board * boards, Turn turn, unsigned int tx)
 				{
 					temp.pieces[x][y+1] = temp.pieces[x][y];
 					temp.pieces[x][y] = empty;
-					boards[tx+move_idx] = temp;
+					boards[22*tx+move_idx] = temp;
 					move_idx++;
 					temp = b;
 				}
@@ -434,7 +454,7 @@ void makeMoves(Board * boards, Turn turn, unsigned int tx)
 					temp.pieces[x+1][y+2] = temp.pieces[x][y];
 					temp.pieces[x][y] = empty;
 					temp.pieces[x+1][y+1] = empty;
-					boards[tx+move_idx] = temp;
+					boards[22*tx+move_idx] = temp;
 					move_idx++;
 					temp = b;
 				}
@@ -444,7 +464,7 @@ void makeMoves(Board * boards, Turn turn, unsigned int tx)
 					temp.pieces[x-1][y+2] = temp.pieces[x][y];
 					temp.pieces[x][y] = empty;
 					temp.pieces[x][y+1] = empty;
-					boards[tx+move_idx] = temp;
+					boards[22*tx+move_idx] = temp;
 					move_idx++;
 					temp = b;
 				}
@@ -454,7 +474,7 @@ void makeMoves(Board * boards, Turn turn, unsigned int tx)
 					temp.pieces[x-1][y+2] = temp.pieces[x][y];
 					temp.pieces[x][y] = empty;
 					temp.pieces[x-1][y+1] = empty;
-					boards[tx+move_idx] = temp;
+					boards[22*tx+move_idx] = temp;
 					move_idx++;
 					temp = b;
 				}
@@ -464,7 +484,7 @@ void makeMoves(Board * boards, Turn turn, unsigned int tx)
 					temp.pieces[x+1][y+2] = temp.pieces[x][y];
 					temp.pieces[x][y] = empty;
 					temp.pieces[x][y+1] = empty;
-					boards[tx+move_idx] = temp;
+					boards[22*tx+move_idx] = temp;
 					move_idx++;
 					temp = b;
 				}
@@ -479,15 +499,13 @@ int makeMove(Board *board);
 int analyseBoard(Board *board, Turn player);
 
 int main(int argc, char **argv) {
+	printf("ere\n");
 	Board * b = (Board *)malloc(sizeof(Board)*512);
 	int moveCount = 1;
 	bool drawFlag = false;
-        b[0] = bad_board;
-
-        b[0].pieces[1][1] = white_reg; b[0].pieces[1][5] = black_reg;
+	initBoard(b);
 	makeMove(b);
-	printBoard(b[0]);
-	//initBoard(b);
+	
 /*
 	while(1)
 	{
@@ -542,8 +560,11 @@ void printBoard(Board b)
 				case black_king_moved:
 					printf("_|B|");
 					break;
-				default:
+				case empty:
 					printf("_|_|");
+					break;
+				default:
+					printf("x|x|");
 					break;
 			}
 		}
@@ -568,8 +589,11 @@ void printBoard(Board b)
 				case black_king_moved:
 					printf("B|_|");
 					break;
-				default:
+				case empty:
 					printf("_|_|");
+					break;
+				default:
+					printf("x|x|");
 					break;
 			}
 		}
@@ -612,7 +636,6 @@ int makeMove(Board *board)
 			<< outputSize << std::endl;
 		return -1;
 	}
-	printf("%d", BLOCK_SIZE);
 	#if USE_GPU
 	// cuda malloc
 	gpuErrChk(cudaMalloc(&device_output, outputSize * sizeof(Board)));
@@ -623,32 +646,47 @@ int makeMove(Board *board)
 				cudaMemcpyHostToDevice));
 
 	//launch kernel and check errors
-	printf("initializing kernel with block dim: %d and grid dim: %d", 
-					(int)ceil(inputSize/(double)BLOCK_SIZE), BLOCK_SIZE);
-	dim3 dimBlock((int)ceil(inputSize/(double)BLOCK_SIZE));
-	dim3 dimGrid(BLOCK_SIZE);
-	expand<<<dimGrid, dimBlock>>>(device_input,
-							 	device_output,
-							 	inputSize);
+	printf("initializing kernel with grid dim: %d and block dim: %d\n", inputSize, BLOCK_SIZE);
+	dim3 dimGrid(inputSize);
+	dim3 dimBlock(BLOCK_SIZE);
+	expand<<<dimGrid, dimBlock>>>(device_input, device_output, inputSize);
 	gpuErrChk(cudaPeekAtLastError());
 	gpuErrChk(cudaDeviceSynchronize());
+	gpuErrChk(cudaMemcpy(host_output, device_output, outputSize * sizeof(Board),
+				cudaMemcpyDeviceToHost));
+	printf("output\n");
+	for(int i = 0; i < outputSize; i++)
+		if (!boardEqualityHost(&bad_board_host, &host_output[i]))	
+		{
+			printBoard(host_output[i]);		
+			printf("Board #: %d", i);
+		}
 
 	inputSize = outputSize;
 	outputSize = inputSize * 512;
 
 	gpuErrChk(cudaFree(device_input));
 	device_input = device_output;
-	gpuErrChk(cudaMalloc(&device_output, 
-				outputSize * sizeof(*device_output)));
+	gpuErrChk(cudaMalloc(&device_output, outputSize * sizeof(Board)));
 	
-	printf("initializing kernel with block dim: %d and grid dim: %d", 
-					(int)ceil(inputSize/(double)BLOCK_SIZE), BLOCK_SIZE);
-	dim3 dimBlock2((int)ceil(inputSize/(double)BLOCK_SIZE));
-	expand<<<dimGrid, dimBlock2>>>(device_input,
-							 	device_output,
-							 	inputSize);
+	printf("initializing kernel with grid dim: %d and block dim: %d\n", inputSize, BLOCK_SIZE);
+	dim3 dimGrid2(inputSize);
+	expand<<<dimGrid2, dimBlock>>>(device_input, device_output,	inputSize);
 	gpuErrChk(cudaPeekAtLastError());
 	gpuErrChk(cudaDeviceSynchronize());
+	
+
+	host_output = (Board *) malloc(outputSize*sizeof(*host_output));
+	gpuErrChk(cudaMemcpy(host_output, device_output, outputSize * sizeof(*device_input),
+				cudaMemcpyDeviceToHost));
+
+	printf("output\n");
+	for(int i = 0; i < outputSize; i++)
+		if (!boardEqualityHost(&bad_board_host, &host_output[i]))	
+		{
+			printBoard(host_output[i]);		
+			printf("Board #: %d", i);
+		}
 	#endif
 
 	
