@@ -36,11 +36,11 @@ enum Turn
 	black
 };
 struct Pair {
-	unsigned char first,
+	unsigned char first;
 	unsigned char second;
 };
 
-const Board bad_board = {empty};
+__constant__ Board bad_board = {empty};
 
 #define USE_GPU 1
 #if USE_GPU
@@ -59,11 +59,10 @@ do\
 	}\
 } while(0)
 
-__device__ int moveCount;
 __device__ Board outputBoard;
-__device__ void makeMoves(Board * boards, Turn turn, unsigned int tx, int *moveCount = NULL);
+__device__ void makeMoves(Board * boards, Turn turn, unsigned int tx);
 
-__device__ bool boardEquality(Board *a, Board*b)
+__device__ bool boardEquality(const Board *a, const Board*b)
 {
 	for(int x = 0; x < 4; x++)
 	{
@@ -79,12 +78,10 @@ __device__ bool boardEquality(Board *a, Board*b)
 }
 __global__ void analyze_tree(Board * input, int moves){
 	int max = 0;
-	for (int j = moves; j > 1 ; j--)
-
 }
 
 __global__ void expand(Board * input, Board * output, int len) {
-	__shared__ Board B[512]; //TODO
+	__shared__ Board B[500]; //TODO
 	unsigned int tx = threadIdx.x;
 	unsigned int blockNum = blockIdx.x+blockIdx.y*gridDim.x;
 	
@@ -97,10 +94,10 @@ __global__ void expand(Board * input, Board * output, int len) {
 		B[tx] = bad_board;
 	}	
 	__syncthreads();
-	if(B[tx] != bad_board)
+	if(boardEquality(&B[tx], &bad_board))
 		makeMoves(B, white, tx);
 	__syncthreads();
-	if(B[tx] != bad_board)
+	if(boardEquality(&B[tx], &bad_board))
 		makeMoves(B, black, tx);
 	__syncthreads();
 
@@ -110,7 +107,7 @@ __global__ void expand(Board * input, Board * output, int len) {
 //TODO: deal with 22 move boundary
 __device__ 
 #endif
-void makeMoves(Board * boards, Turn turn, unsigned int tx, int *moveCount /* = NULL */)
+void makeMoves(Board * boards, Turn turn, unsigned int tx)
 {
 
 	if(turn == white)
@@ -127,7 +124,7 @@ void makeMoves(Board * boards, Turn turn, unsigned int tx, int *moveCount /* = N
 				/*White pieces move (not take) */
 				if(y%2 && y < 6 && x != 3 && !b.pieces[x+1][y+1]) 
 				{	
-					printf("white at %d,%d move right\n", x, y);
+					//printf("white at %d,%d move right\n", x, y);
 					temp.pieces[x+1][y+1] = temp.pieces[x][y];
 					temp.pieces[x][y] = empty;
 					boards[tx+move_idx*exp_rate] = temp;
@@ -136,7 +133,7 @@ void makeMoves(Board * boards, Turn turn, unsigned int tx, int *moveCount /* = N
 				}
 				if(y%2 && y < 6 && !b.pieces[x][y+1])
 				{
-					printf("white at %d,%d move left\n", x, y);
+					//printf("white at %d,%d move left\n", x, y);
 					temp.pieces[x][y+1] = temp.pieces[x][y];
 					temp.pieces[x][y] = empty;
 					boards[tx+move_idx*exp_rate] = temp;
@@ -145,7 +142,7 @@ void makeMoves(Board * boards, Turn turn, unsigned int tx, int *moveCount /* = N
 				}
 				if(!(y%2) && x != 0 && !b.pieces[x-1][y+1])
 				{
-					printf("white at %d,%d move left\n", x, y);
+					//printf("white at %d,%d move left\n", x, y);
 					if (y == 6)
 						temp.pieces[x-1][y+1] = white_king;
 					else
@@ -157,7 +154,7 @@ void makeMoves(Board * boards, Turn turn, unsigned int tx, int *moveCount /* = N
 				}
 				if(!(y%2) && !b.pieces[x][y+1])
 				{
-					printf("white at %d,%d move right\n", x, y);
+					//printf("white at %d,%d move right\n", x, y);
 					if (y == 6)
 						temp.pieces[x][y+1] = white_king;
 					else
@@ -293,11 +290,6 @@ void makeMoves(Board * boards, Turn turn, unsigned int tx, int *moveCount /* = N
 				}
 			}
 		}
-		if(moveCount != NULL)
-		{
-			*moveCount = move_idx;
-		}
-
 	}
 	else
 	{
@@ -312,7 +304,7 @@ void makeMoves(Board * boards, Turn turn, unsigned int tx, int *moveCount /* = N
 				/*White pieces move (not take) */
 				if(y%2 && x != 3 && !b.pieces[x+1][y-1]) 
 				{	
-					printf("black at %d,%d move right\n", x, y);
+					//printf("black at %d,%d move right\n", x, y);
 					if (y == 1)
 						temp.pieces[x+1][y-1] = black_king;
 					else
@@ -324,7 +316,7 @@ void makeMoves(Board * boards, Turn turn, unsigned int tx, int *moveCount /* = N
 				}
 				if(y%2 && !b.pieces[x][y-1])
 				{
-					printf("black at %d,%d move left\n", x, y);
+					//printf("black at %d,%d move left\n", x, y);
 					if (y == 1)
 						temp.pieces[x+1][y-1] = black_king;
 					else
@@ -336,7 +328,7 @@ void makeMoves(Board * boards, Turn turn, unsigned int tx, int *moveCount /* = N
 				}
 				if(!(y%2) && x != 0 && !b.pieces[x-1][y-1])
 				{
-					printf("black at %d,%d move left\n", x, y);
+					//printf("black at %d,%d move left\n", x, y);
 					temp.pieces[x-1][y-1] = temp.pieces[x][y];
 					temp.pieces[x][y] = empty;
 					boards[tx+move_idx] = temp;
@@ -345,7 +337,7 @@ void makeMoves(Board * boards, Turn turn, unsigned int tx, int *moveCount /* = N
 				}
 				if(!(y%2) && !b.pieces[x][y-1])
 				{
-					printf("black at %d,%d move right\n", x, y);
+					//printf("black at %d,%d move right\n", x, y);
 					temp.pieces[x][y-1] = temp.pieces[x][y];
 					temp.pieces[x][y] = empty;
 					boards[tx+move_idx] = temp;
@@ -478,11 +470,6 @@ void makeMoves(Board * boards, Turn turn, unsigned int tx, int *moveCount /* = N
 				}
 			}
 		}
-		if(moveCount != NULL)
-		{
-			*moveCount = move_idx;
-		}
-
 	}
 } 
 
@@ -493,46 +480,32 @@ int analyseBoard(Board *board, Turn player);
 
 int main(int argc, char **argv) {
 	Board * b = (Board *)malloc(sizeof(Board)*512);
-	int moveCount = 0;
+	int moveCount = 1;
 	bool drawFlag = false;
         b[0] = bad_board;
 
         b[0].pieces[1][1] = white_reg; b[0].pieces[1][5] = black_reg;
+	makeMove(b);
+	printBoard(b[0]);
 	//initBoard(b);
-
+/*
 	while(1)
 	{
 		printBoard(b[0]);
-		makeMoves(b, white, 0, &moveCount);
-		/*
+		makeMove(b);
 		for (int i = 0; i < 256; i++)
 			for(int a = 0; a < 4; a++)
 				for(int j = 0; j < 8; j++)
 					if(b[i].pieces[a][j] != 0)
 					{
-						printf("B: %d, Loc: (%d, %d), piece: %d\n", i, a, j, b[i].pieces[a][j]);
+						//printf("B: %d, Loc: (%d, %d), piece: %d\n", i, a, j, b[i].pieces[a][j]);
 						printBoard(b[i]);
 						break;
 					}
-		*/
-		if(!moveCount)
-		{
-			if(drawFlag)
-			{
-				printBoard(b[0]);
-				return 0;
-			} else
-			{
-				drawFlag = true;
-			}
-		} else
-		{
-			drawFlag = false;
-		}
 		for(int i = 0; i < moveCount; i++)
 		{
 			int score = analyseBoard(&b[i], white);
-			printf("B: %d Score: %d\n", i, score);
+			//printf("B: %d Score: %d\n", i, score);
 			if(!analyseBoard(&b[i], black)) 
 			{
 				printBoard(b[i]);
@@ -542,6 +515,7 @@ int main(int argc, char **argv) {
 
 		}
 	}
+		*/
 }
 void printBoard(Board b)
 {
@@ -638,17 +612,22 @@ int makeMove(Board *board)
 			<< outputSize << std::endl;
 		return -1;
 	}
+	printf("%d", BLOCK_SIZE);
 	#if USE_GPU
-	dim3 dimBlock(BLOCK_SIZE);
-	gpuErrChk(cudaMalloc(&device_output, 
-				outputSize * sizeof(*device_output)));
-	gpuErrChk(cudaMalloc(&device_input, 
-				inputSize * sizeof(*device_input)));
-	gpuErrChk(cudaMemcpy(device_input, host_input, 
-				inputSize * sizeof(*device_input),
+	// cuda malloc
+	gpuErrChk(cudaMalloc(&device_output, outputSize * sizeof(Board)));
+	gpuErrChk(cudaMalloc(&device_input, inputSize * sizeof(Board)));
+	
+	// cuda memcpy
+	gpuErrChk(cudaMemcpy(device_input, host_input, inputSize * sizeof(*device_input),
 				cudaMemcpyHostToDevice));
 
-	expand<<<dim3(ceil(inputSize/BLOCK_SIZE)), dimBlock>>>(device_input,
+	//launch kernel and check errors
+	printf("initializing kernel with block dim: %d and grid dim: %d", 
+					(int)ceil(inputSize/(double)BLOCK_SIZE), BLOCK_SIZE);
+	dim3 dimBlock((int)ceil(inputSize/(double)BLOCK_SIZE));
+	dim3 dimGrid(BLOCK_SIZE);
+	expand<<<dimGrid, dimBlock>>>(device_input,
 							 	device_output,
 							 	inputSize);
 	gpuErrChk(cudaPeekAtLastError());
@@ -662,9 +641,12 @@ int makeMove(Board *board)
 	gpuErrChk(cudaMalloc(&device_output, 
 				outputSize * sizeof(*device_output)));
 	
-	expand<<<dim3(ceil(inputSize/BLOCK_SIZE)), dimBlock>>>(device_input,
-								device_output,
-								inputSize);
+	printf("initializing kernel with block dim: %d and grid dim: %d", 
+					(int)ceil(inputSize/(double)BLOCK_SIZE), BLOCK_SIZE);
+	dim3 dimBlock2((int)ceil(inputSize/(double)BLOCK_SIZE));
+	expand<<<dimGrid, dimBlock2>>>(device_input,
+							 	device_output,
+							 	inputSize);
 	gpuErrChk(cudaPeekAtLastError());
 	gpuErrChk(cudaDeviceSynchronize());
 	#endif
