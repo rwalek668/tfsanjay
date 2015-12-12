@@ -1,8 +1,8 @@
 #include <iostream>
 #include <stdint.h>
-#include <stdio.h>
+#include <cstdio>
 #include <time.h>
-
+#define USE_GPU 1
 
 /*
 enum Piece
@@ -31,6 +31,7 @@ const Piece black_king_moved = black_king + 1;
 
 struct Board {
 	Piece pieces[4][8];
+	bool valid;
 };
 enum Turn
 {
@@ -42,11 +43,9 @@ struct Pair {
 	unsigned char second;
 };
 
-__constant__ Board bad_board = {empty};
-Board bad_board_host = {empty};
+const Board bad_board_host = {{empty}, false};
+__constant__  Board bad_board = {{empty}, false};
 
-#define USE_GPU 1
-#if USE_GPU
 
 #define BLOCK_SIZE 512
 #define gpuErrChk(stmt) \
@@ -63,9 +62,11 @@ do\
 } while(0)
 
 __device__ Board outputBoard;
-__device__ void makeMoves(Board * boards, Turn turn, unsigned int tx);
+__host__ __device__ void makeMoves(Board * boards, Turn turn, unsigned int tx);
 
-__device__ bool boardEquality(const Board *a, const Board*b)
+
+
+__host__ __device__ bool boardEquality(const Board *a, const Board *b)
 {
 	for(int x = 0; x < 4; x++)
 	{
@@ -79,27 +80,23 @@ __device__ bool boardEquality(const Board *a, const Board*b)
 	}
 	return true;
 }
-bool boardEqualityHost(const Board *a, const Board*b)
+
+__host__ bool boardIsValid_host(const Board *a)
 {
-	for(int x = 0; x < 4; x++)
-	{
-		for(int y = 0; y < 8; y++)
-		{
-			if(a->pieces[x][y] != b->pieces[x][y])
-			{
-				return false;
-			}
-		}
-	}
-	return true;
+	return !boardEquality(a, &bad_board_host);
+}
+
+__device__ bool boardIsValid_device(const Board *a)
+{
+	return !boardEquality(a, &bad_board);
 }
 __global__ void analyze_tree(Board * input, int moves){
 	int max = 0;
 }
 
 __global__ void expand(Board * input, Board * output, int len) {
-	const int shared_size = 496;
-	__shared__ Board B[shared_size];
+	const int shared_size = 484;
+	__shared__ Board B[shared_size]; //TODO
 	unsigned int tx = threadIdx.x;
 	unsigned int blockNum = blockIdx.x+blockIdx.y*gridDim.x;
 	
@@ -125,10 +122,9 @@ __global__ void expand(Board * input, Board * output, int len) {
 		output[blockDim.x*blockNum+tx] = bad_board;
 }
 
-
 //TODO: deal with 22 move boundary
-__device__ 
-#endif
+__host__ __device__ 
+
 void makeMoves(Board * boards, Turn turn, unsigned int tx)
 {
 	// tx = 0 condition because only the first thread has a valid board to work on.
@@ -223,7 +219,7 @@ void makeMoves(Board * boards, Turn turn, unsigned int tx)
 					move_idx++;
 					temp = b;
 				}
-				if(!(y%2) && y < 5 && b.pieces[x][y+1] > white_king_moved && !b.pieces[x+1][y+2])
+				if(!(y%2) && y < 5 && x != 3 && b.pieces[x][y+1] > white_king_moved && !b.pieces[x+1][y+2])
 				{
 					//TODO add double takes here
 					temp.pieces[x+1][y+2] = temp.pieces[x][y];
@@ -506,35 +502,6 @@ int main(int argc, char **argv) {
 	bool drawFlag = false;
 	initBoard(b);
 	makeMove(b);
-	
-/*
-	while(1)
-	{
-		printBoard(b[0]);
-		makeMove(b);
-		for (int i = 0; i < 256; i++)
-			for(int a = 0; a < 4; a++)
-				for(int j = 0; j < 8; j++)
-					if(b[i].pieces[a][j] != 0)
-					{
-						//printf("B: %d, Loc: (%d, %d), piece: %d\n", i, a, j, b[i].pieces[a][j]);
-						printBoard(b[i]);
-						break;
-					}
-		for(int i = 0; i < moveCount; i++)
-		{
-			int score = analyseBoard(&b[i], white);
-			//printf("B: %d Score: %d\n", i, score);
-			if(!analyseBoard(&b[i], black)) 
-			{
-				printBoard(b[i]);
-				return 0;
-			}
-			//printBoard(b[i]);
-
-		}
-	}
-		*/
 }
 void printBoard(Board b)
 {
@@ -630,88 +597,150 @@ int makeMove(Board *board)
 	int outputSize = inputSize * 512;
 	
 	host_input =  board;
-	#if USE_GPU
 
-	// cuda malloc
-	cudaMalloc(&device_output, outputSize * sizeof(Board));
-	cudaMalloc(&device_input, inputSize * sizeof(Board));
-	
-	// cuda memcpy
-	cudaMemcpy(device_input, host_input, inputSize * sizeof(*device_input), cudaMemcpyHostToDevice);
-
-	//launch kernel and check errors
-	//printf("initializing kernel with grid dim: %d and block dim: %d\n", inputSize, BLOCK_SIZE);
-	dim3 dimGrid(inputSize);
-	dim3 dimBlock(BLOCK_SIZE);
-	expand<<<dimGrid, dimBlock>>>(device_input, device_output, inputSize);
-	cudaPeekAtLastError();
-	cudaDeviceSynchronize();
-
-	//set up for second kernel launch
-	inputSize = outputSize;
-	outputSize = inputSize * 512;
-	cudaFree(device_input);
-	device_input = device_output;
-	cudaMalloc(&device_output, outputSize * sizeof(Board));
-	
-	//launch kernel and check errors
-	//printf("initializing kernel with grid dim: %d and block dim: %d\n", inputSize, BLOCK_SIZE);
-	dim3 dimGrid2(inputSize);
-	expand<<<dimGrid2, dimBlock>>>(device_input, device_output,	inputSize);
-	cudaPeekAtLastError();
-	cudaDeviceSynchronize();
-	
-	//print all boards after 2 full turns have been taken
-	/*host_output = (Board *) malloc(outputSize*sizeof(*host_output));
-	gpuErrChk(cudaMemcpy(host_output, device_output, outputSize * sizeof(*device_input),
-				cudaMemcpyDeviceToHost));
-	for(int i = 0; i < outputSize; i++)
-		if (!boardEqualityHost(&bad_board_host, &host_output[i]))	
-		{	
-			int a = 0;
-			//printBoard(host_output[i]);		
-			//printf("Board #: %d", i);
-		}
-*/
-	for(int i = 0; i < 512*512; i++)
+	if(!host_output)
 	{
-		device_input = &device_output[i];
-		Board *temp_device_output;
-		cudaMalloc(&temp_device_output, 512*sizeof(Board));
-		dim3 dimGrid(1);
-		dim3 dimBlock(512);
-		expand<<<dimGrid, dimBlock>>>(device_input, temp_device_output, 1);
+		fprintf(stderr, "new failed on size %d\n", outputSize);
+		return -1;
+	}
+	//printf("%d", BLOCK_SIZE);
+
+
+	if(USE_GPU)
+	{
+		// cuda malloc
+		cudaMalloc(&device_output, outputSize * sizeof(Board));
+		cudaMalloc(&device_input, inputSize * sizeof(Board));
+		
+		// cuda memcpy
+		cudaMemcpy(device_input, host_input, inputSize * sizeof(*device_input), cudaMemcpyHostToDevice);
+
+		//launch kernel and check errors
+		//printf("initializing kernel with grid dim: %d and block dim: %d\n", inputSize, BLOCK_SIZE);
+		dim3 dimGrid(inputSize);
+		dim3 dimBlock(BLOCK_SIZE);
+		expand<<<dimGrid, dimBlock>>>(device_input, device_output, inputSize);
+		cudaPeekAtLastError();
+		cudaDeviceSynchronize();
+
+		//set up for second kernel launch
+		inputSize = outputSize;
+		outputSize = inputSize * 512;
+		cudaFree(device_input);
+		device_input = device_output;
+		cudaMalloc(&device_output, outputSize * sizeof(Board));
+		
+		//launch kernel and check errors
+		//printf("initializing kernel with grid dim: %d and block dim: %d\n", inputSize, BLOCK_SIZE);
+		dim3 dimGrid2(inputSize);
+		expand<<<dimGrid2, dimBlock>>>(device_input, device_output,	inputSize);
 		cudaPeekAtLastError();
 		cudaDeviceSynchronize();
 		
-		device_input = temp_device_output;
-		gpuErrChk(cudaMalloc(&temp_device_output, 512*512*sizeof(Board)));
-		dim3 dimGrid2(512);
-		expand<<<dimGrid2, dimBlock>>>(device_input, temp_device_output, 512);
-		cudaPeekAtLastError();
-		cudaDeviceSynchronize();
-
-		host_output = (Board *) malloc(512*512*sizeof(*host_output));
-		gpuErrChk(cudaMemcpy(host_output, temp_device_output, 512*512*sizeof(Board),
+		//print all boards after 2 full turns have been taken
+		/*host_output = (Board *) malloc(outputSize*sizeof(*host_output));
+		gpuErrChk(cudaMemcpy(host_output, device_output, outputSize * sizeof(*device_input),
 					cudaMemcpyDeviceToHost));
-		gpuErrChk(cudaFree(temp_device_output));
-		gpuErrChk(cudaFree(device_input));
-		//for(int i = 0; i < 512*512; i++)
+		for(int i = 0; i < outputSize; i++)
+			if (!boardEqualityHost(&bad_board_host, &host_output[i]))	
+			{	
+				int a = 0;
+				//printBoard(host_output[i]);		
+				//printf("Board #: %d", i);
+			}
+	*/
+		for(int i = 0; i < 512; i++)
+		{
+			device_input = &device_output[i];
+			Board *temp_device_output;
+			cudaMalloc(&temp_device_output, 512*sizeof(Board));
+			dim3 dimGrid(1);
+			dim3 dimBlock(512);
+			expand<<<dimGrid, dimBlock>>>(device_input, temp_device_output, 1);
+			cudaPeekAtLastError();
+			cudaDeviceSynchronize();
+			
+			device_input = temp_device_output;
+			gpuErrChk(cudaMalloc(&temp_device_output, 512*512*sizeof(Board)));
+			dim3 dimGrid2(512);
+			expand<<<dimGrid2, dimBlock>>>(device_input, temp_device_output, 512);
+			cudaPeekAtLastError();
+			cudaDeviceSynchronize();
+			host_output = (Board *) malloc(512*512*sizeof(*host_output));
+			gpuErrChk(cudaMemcpy(host_output, temp_device_output, 512*512*sizeof(Board),
+					cudaMemcpyDeviceToHost));
+			gpuErrChk(cudaFree(temp_device_output));
+			gpuErrChk(cudaFree(device_input));
+			//for(int i = 0; i < 512*512; i++)
 			//if (!boardEqualityHost(&bad_board_host, &host_output[i]))	
-			if(i == 512*512-1)
+			if(i == 512-1)
 			{	
 				int a = 0;
 				printBoard(host_output[0]);		
 				printf("Board #: %d", 0);
-			}	
-	
+			}
+		}
+	} else // iterative version
+	{
+		Turn turn = white;
+		host_output = new Board[22*22*22*22];
+		host_output[0] = *board;
+		if(!host_output)
+		{
+			fprintf(stderr, "operator new failed on size %d\n", 22*22*22*22);
+			return -1;
+		}
+		clock_t start = clock(), diff;
+		makeMoves(host_output, turn, 0);
+		
+		turn = black;
+		for(int i = 0; i < 22; i++)
+		{
+			if(boardIsValid_host(&host_output[i]))
+			{
+				makeMoves(host_output, turn, i);
+			}
+		}
+
+		//printBoard(host_output[0]);
+		turn = white;
+		for(int i = 0; i < 22 * 22; i++)
+		{
+			if(boardIsValid_host(&host_output[i]))
+			{
+				makeMoves(host_output, turn, i);
+			}
+		}
+		
+		//printBoard(host_output[0]);
+		turn = black;
+		for(int i = 0; i < 22 * 22 * 22; i++)
+		{
+			if(boardIsValid_host(&host_output[i]))
+			{
+				makeMoves(host_output, turn, i);
+			}
+		}
+		diff = clock() - start;
+		int msec = diff * 1000 / CLOCKS_PER_SEC;
+		printf("Time taken %d seconds %d milliseconds\n", msec/1000, msec%1000);
+		//printBoard(host_output[0]);
+		
+		int sum = 0, last_idx;
+		for(int i = 0; i < 22 * 22 * 22 * 22; i++)
+		{
+			if(boardIsValid_host(&host_output[i]))
+			{
+				sum++;
+				last_idx = i;
+			}
+		}
+		
+		printf("%d %d\n", sum, last_idx);
+		printBoard(host_output[last_idx]);
+		
+		*board = host_output[0];
 	}
-
-
-
-	#endif
-	
-
 	return 0;
 }
 
@@ -741,10 +770,4 @@ int analyseBoard(Board *board, Turn player)
 		}
 	}
 	return score;		
-
-
-
-
-
-
 }
