@@ -121,35 +121,34 @@ __device__ int analyseBoard(Board *board)
 //works with 512 spawned threads
 __global__ void analyze_score_tree(int * input, int * output){
 	int tx = threadIdx.x;
-	int base_board = tx/22;	
-	int board_from_base = tx%22;
 
 	unsigned int blockNum = blockIdx.x+blockIdx.y*gridDim.x;
 	__shared__ int scores[512];
-	__shared__ bool invalid[512];
+	__shared__ int mins[22];
 
 	scores[tx] = input[blockNum*blockDim.x+tx];
-	invalid[tx] = (scores[tx] > 20000);
+	__syncthreads();
 
-	for(int stride = 2; stride <= 32; stride *= 2)
-	{	
-		if (board_from_base*(stride) + stride/2 < 22)
-			scores[base_board+board_from_base*stride] = min(scores[base_board+board_from_base*stride], 
-														scores[base_board+board_from_base*stride+stride/2]);
-	}
-	for( int stride = 2; stride <= 32; stride *= 2)
+	if(threadIdx.x < 22)
 	{
-		int index1 = base_board*stride*22;
-		int index2 = base_board*stride*22+stride*11;
-		if(base_board*stride+stride/2 < 22)
+		int min = 1000000;
+		for(int i = 0; i < 22; i++)
 		{
-			scores[base_board*stride*22] = max(invalid[index1]*-2000000+scores[index1],
-											invalid[index2]*-2000000+scores[index2]);
+			int temp = scores[threadIdx.x*22+i];
+			if (temp < min && temp != -100000000)
+				min = temp;
 		}
+		mins[threadIdx.x] = min;
 	}
-
-	if (threadIdx.x == 0)
-		output[blockNum] = scores[0];
+	__syncthreads();
+	if(threadIdx.x == 0)
+	{
+		int max = -100000000;
+		for(int i = 0; i < 22; i++)
+			if(mins[i] > max && mins[i] != 1000000)
+				max = mins[i];
+		output[blockNum] = max;
+	}
 	
 	
 }
@@ -158,39 +157,58 @@ __global__ void analyze_score_tree(int * input, int * output){
 //works with 512 spawned threads
 __global__ void analyze_board_tree(Board * input, int * output){
 	int tx = threadIdx.x;
-	int base_board = tx/22;	
-	int board_from_base = tx%22;
 
 	unsigned int blockNum = blockIdx.x+blockIdx.y*gridDim.x;
 	__shared__ int scores[512];
-	__shared__ bool invalid[512];
+	__shared__ int mins[22];
 
 	scores[tx] = analyseBoard(&input[blockNum*blockDim.x+threadIdx.x]);
-	invalid[tx] = (scores[tx] > 20000);
+	__syncthreads();
 
+	if(threadIdx.x < 22)
+	{
+		int min = 1000000;
+		for(int i = 0; i < 22; i++)
+		{
+			int temp = scores[threadIdx.x*22+i];
+			if (temp < min)
+				min = temp;
+		}
+		mins[threadIdx.x] = min;
+	}
+	__syncthreads();
+	if(threadIdx.x == 0)
+	{
+		int max = -100000000;
+		for(int i = 0; i < 22; i++)
+			if(mins[i] > max && mins[i] != 1000000)
+				max = mins[i];
+		output[blockNum] = max;
+	}
+/*
 	for(int stride = 2; stride <= 32; stride *= 2)
 	{	
-		if (board_from_base*(stride) + stride/2 < 22)
-			scores[base_board+board_from_base*stride] = min(scores[base_board+board_from_base*stride], 
-														scores[base_board+board_from_base*stride+stride/2]);
+		if (board_from_base*(stride) + stride/2 < 22 && board_from_base%stride == 0)
+			if(scores[base_board+board_from_base*stride+stride/2] < scores[base_board+board_from_base*stride])
+			scores[base_board+board_from_base*stride] = scores[base_board+board_from_base*stride+stride/2];
 		__syncthreads();
 	}
 	for( int stride = 2; stride <= 32; stride *= 2)
 	{
 		int index1 = base_board*stride*22;
 		int index2 = base_board*stride*22+stride*11;
-		if(base_board*stride+stride/2 < 22)
+		if(base_board*stride+stride/2 < 22 && base_board%stride == 0)
 		{
-			scores[base_board*stride*22] = max(invalid[index1]*-2000000+scores[index1],
-											invalid[index2]*-2000000+scores[index2]);
+			if( scores[index1] < scores[index2] && scores[index2] != 1000000)
+				scores[base_board*stride*22] = scores[index2];
+			if (scores[base_board*stride*22] == 1000000)
+				scores[base_board*stride*22] = -1000000;
 		}
 		__syncthreads();
 	}
 
 	if (threadIdx.x == 0)
-		output[blockNum] = scores[0];
-	
-	
+		output[blockNum] = scores[0];*/
 }
 
 __global__ void expand(Board * input, Board * output, int len) {
@@ -590,11 +608,41 @@ void printBoard(Board b);
 int initBoard(Board *b);
 int makeMove(Board *board);
 int analyseBoard(Board *board, Turn player);
+void reverse(Board * b);
 
 int main(int argc, char **argv) {
 	Board * b = (Board *)malloc(sizeof(Board)*512);
 	initBoard(b);
-	makeMove(b);
+	for(int i = 0; i <100; i++)
+	{
+		makeMove(b);
+		if(i%2)
+		printBoard(b[0]);
+		reverse(b);
+		//printBoard(b[0]);
+	}
+	
+}
+void reverse(Board * b)
+{
+	Piece temp;
+	for(int i = 0; i < 2; i++)
+		for(int j = 0; j < 8; j++)
+		{	
+			temp = b->pieces[i][j];
+			if(b->pieces[3-i][7-j] > 4)
+				b->pieces[i][j] = b->pieces[3-i][7-j]-4;
+			else if(b->pieces[3-i][7-j] <= 4 && b->pieces[3-i][7-j] > 0)
+				b->pieces[i][j] = b->pieces[3-i][7-j]+4;
+			else
+				b->pieces[i][j] = b->pieces[3-i][7-j];
+			if(temp > 4)
+				b->pieces[3-i][7-j] = temp-4;
+			else if(temp <= 4 && temp > 0)
+				b->pieces[3-i][7-j] = temp+4;
+			else
+				b->pieces[3-i][7-j] = temp;
+		}
 }
 void printBoard(Board b)
 {
@@ -684,99 +732,113 @@ int makeMove(Board *board)
 	Board *host_output;
 	Board *host_input;
 	Board *device_output;
+	Board *device1_output;
+	Board *device2_output;
 	Board *device_input;
 
 	int inputSize = 1;
 	int outputSize = inputSize * 512;
 	
-	host_input =  board;
+	host_input = board;
 
 	if(USE_GPU)
 	{
 		// cuda malloc
-		cudaMalloc(&device_output, outputSize * sizeof(Board));
 		cudaMalloc(&device_input, inputSize * sizeof(Board));
+		cudaMalloc(&device1_output, outputSize * sizeof(Board));
+		cudaMalloc(&device2_output, outputSize * 512 * sizeof(Board));
 		
 		// cuda memcpy
 		cudaMemcpy(device_input, host_input, inputSize * sizeof(*device_input), cudaMemcpyHostToDevice);
 
 		//launch kernel and check errors
 		//printf("initializing kernel with grid dim: %d and block dim: %d\n", inputSize, BLOCK_SIZE);
-		dim3 dimGrid(inputSize);
+		dim3 dimGrid(1);
 		dim3 dimBlock(BLOCK_SIZE);
-		expand<<<dimGrid, dimBlock>>>(device_input, device_output, inputSize);
+		expand<<<dimGrid, dimBlock>>>(device_input, device1_output, inputSize);
 		cudaPeekAtLastError();
 		cudaDeviceSynchronize();
 
 		//set up for second kernel launch
 		inputSize = outputSize;
 		outputSize = inputSize * 512;
-		cudaFree(device_input);
-		device_input = device_output;
-		cudaMalloc(&device_output, outputSize * sizeof(Board));
 		
 		//launch kernel and check errors
 		//printf("initializing kernel with grid dim: %d and block dim: %d\n", inputSize, BLOCK_SIZE);
-		dim3 dimGrid2(inputSize);
-		expand<<<dimGrid2, dimBlock>>>(device_input, device_output,	inputSize);
+		dim3 dimGrid2(512);
+		expand<<<dimGrid2, dimBlock>>>(device1_output, device2_output,	inputSize);
 		cudaPeekAtLastError();
 		cudaDeviceSynchronize();
 		
-		//print all boards after 2 full turns have been taken
-		host_output = (Board *) malloc(outputSize*sizeof(*host_output));
-		gpuErrChk(cudaMemcpy(host_output, device_output, outputSize * sizeof(*device_input),
-					cudaMemcpyDeviceToHost));
-		for(int i = 0; i < outputSize; i++)
-		{
-			if(false && !boardEquality(&bad_board_host, &host_output[i]))
-			{
-				printBoard(host_output[i]);		
-				printf("Board #: %d", i);
-			}
-		}
-		int expansion_rate = 32;
+		int expansion_rate = 512;
 		dim3 dimGrid3(1*expansion_rate);
 		dim3 dimGrid4(512*expansion_rate);
 		
-		Board *temp_device_output;
+		//Board *temp_device_output;
 		Board *third_level_output;
+		int * device_first_level_scores;
 		int * device_second_level_scores;
 		int * device_third_level_scores;
 		cudaMalloc(&device_second_level_scores, 512*512*sizeof(int));
 		cudaMalloc(&device_third_level_scores, 512*expansion_rate*sizeof(int));
-		gpuErrChk(cudaMalloc(&temp_device_output, 512*512*expansion_rate*sizeof(Board)));
+		cudaMalloc(&device_first_level_scores, 512*sizeof(int));
+		//gpuErrChk(cudaMalloc(&temp_device_output, 512*512*expansion_rate*sizeof(Board)));
 		gpuErrChk(cudaMalloc(&third_level_output, 512*expansion_rate*sizeof(Board)));
 
 		for(int i = 0; i < 512*512/expansion_rate; i++)
 		{
-			device_input = &device_output[i*expansion_rate];
+			device_input = &device2_output[i*expansion_rate];
 			expand<<<dimGrid3, dimBlock>>>(device_input, third_level_output, expansion_rate);
 			cudaPeekAtLastError();
 			cudaDeviceSynchronize();
 			
-			expand<<<dimGrid2, dimBlock>>>(third_level_output, temp_device_output, 512*expansion_rate);
+			//expand<<<dimGrid4, dimBlock>>>(third_level_output, temp_device_output, 512*expansion_rate);
+			//cudaPeekAtLastError();
+			//cudaDeviceSynchronize();
+			//analyze_board_tree<<<dimGrid4, dimBlock>>>(temp_device_output, device_third_level_scores);
+			//cudaPeekAtLastError();
+			//cudaDeviceSynchronize();
+			analyze_board_tree<<<dimGrid3, dimBlock>>>(third_level_output, 
+														&device_second_level_scores[i*expansion_rate]);
 			cudaPeekAtLastError();
 			cudaDeviceSynchronize();
-			analyze_board_tree<<<dimGrid2, dimBlock>>>(temp_device_output, device_third_level_scores);
-			analyze_score_tree<<<dimGrid4, dimBlock>>>(device_third_level_scores, 
-														&device_second_level_scores[i*expansion_rate]);
-
 		}
-		int * second_level_scores = (int*)malloc(512*512*sizeof(int));
+		analyze_score_tree<<<dimGrid2, dimBlock>>>(device_second_level_scores, 
+													device_first_level_scores);
+		cudaPeekAtLastError();
+		cudaDeviceSynchronize();
+		int * first_level_scores = (int*)malloc(512*sizeof(int));
 		Board * second_level_boards = (Board*)malloc(512*512*sizeof(Board));
-		cudaMemcpy(second_level_scores, device_second_level_scores, 512*512*sizeof(int), cudaMemcpyDeviceToHost);
-		cudaMemcpy(second_level_boards, device_output, 512*512*sizeof(Board), cudaMemcpyDeviceToHost);
-		for(int i = 0; i < 512*512; i++)
+		cudaMemcpy(first_level_scores, device_first_level_scores, 512*sizeof(int), cudaMemcpyDeviceToHost);
+		int max = -100000;
+		int index = -1;
+		for(int i = 0; i < 22; i++)
 		{	
-			if(!boardEquality(&bad_board_host, &second_level_boards[i]))
+			int min = 1000000;	
+			for(int j = 0; j < 22; j++)
+				if(first_level_scores[22*i+j] < min && first_level_scores[22*i+j] != -100000000)
+					min = first_level_scores[22*i+j];
+			if (min > max && min != 1000000)
 			{
-				printf("board %d, scores %d\n", i, second_level_scores[i]);
-				printBoard(second_level_boards[i]);
+				index = i;
+				max = min;
 			}
 		}
-		gpuErrChk(cudaFree(temp_device_output));
-		gpuErrChk(cudaFree(device_output));
-		gpuErrChk(cudaFree(device_third_level_scores));
+		Board boards[512];
+		boards[0] = host_input[0];
+		makeMoves(boards, white, 0);
+		host_input[0] = boards[22*index];
+
+		cudaFree(device_second_level_scores);
+		cudaFree(device_third_level_scores);
+		cudaFree(device_first_level_scores);
+		cudaFree(third_level_output);
+		cudaFree(device_input);
+		cudaFree(device1_output);
+		cudaFree(device2_output);
+		free(first_level_scores);
+		free(second_level_boards);
+		return 0;
 	} else // iterative version
 	{
 		Turn turn = white;
