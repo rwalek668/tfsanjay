@@ -1,7 +1,10 @@
+#include <algorithm>
+#include <math.h>
 #include <iostream>
 #include <stdint.h>
-#include <cstdio>
+#include <stdio.h>
 #include <time.h>
+
 #define USE_GPU 1
 
 /*
@@ -31,7 +34,7 @@ const Piece black_king_moved = black_king + 1;
 
 struct Board {
 	Piece pieces[4][8];
-	bool valid;
+	//bool valid;
 };
 enum Turn
 {
@@ -43,8 +46,8 @@ struct Pair {
 	unsigned char second;
 };
 
-const Board bad_board_host = {{empty}, false};
-__constant__  Board bad_board = {{empty}, false};
+const Board bad_board_host = {{empty}};//, false};
+__constant__  Board bad_board = {{empty}};//, false};
 
 
 #define BLOCK_SIZE 512
@@ -739,8 +742,7 @@ int makeMove(Board *board)
 	int inputSize = 1;
 	int outputSize = inputSize * 512;
 	
-	host_input = board;
-
+	host_input =  board;
 	if(USE_GPU)
 	{
 		// cuda malloc
@@ -841,15 +843,53 @@ int makeMove(Board *board)
 		return 0;
 	} else // iterative version
 	{
-		Turn turn = white;
-		host_output = new Board[22*22*22*22];
-		host_output[0] = *board;
+		int numTurns;
+		std::cin >> numTurns;
+		unsigned long size = 1;
+		for(int i = 0; i < numTurns; i++, size *=484);
+		host_output = new (std::nothrow) Board[size];
 		if(!host_output)
 		{
-			fprintf(stderr, "operator new failed on size %d\n", 22*22*22*22);
+			fprintf(stderr, "operator new failed on size %lu\n", size);
 			return -1;
 		}
+		host_output[0] = *board;
 		clock_t start = clock(), diff;
+
+		for(int i = 0; i < numTurns; i++)
+		{
+			Board *temp_output = new (std::nothrow) Board[size];
+			if(!temp_output)
+			{
+				fprintf(stderr, "new failed on size %lu\n", size);
+				return -1;
+			}
+
+			for( int j = 0; j < pow(484, i); j++)
+			{
+				if(!boardIsValid_host(&host_output[j]))
+				{
+					continue;
+				}
+				Board b[484] = {empty};
+				b[0] = host_output[j];
+				makeMoves(b, white, 0);
+				for(int k = 0; k < 484; k++)
+				{
+					if(boardIsValid_host(&b[k]))
+					{
+						makeMoves(b, black, k);
+					}
+					temp_output[484 * j + k] = b[k];
+				}
+			}
+			delete[] host_output;
+			host_output = temp_output;
+		}
+		diff = clock() - start;
+		int msec = diff * 1000 / CLOCKS_PER_SEC;
+		printf("Time taken %d seconds %d milliseconds\n", msec/1000, msec%1000);
+		/*
 		makeMoves(host_output, turn, 0);
 		
 		turn = black;
@@ -884,14 +924,15 @@ int makeMove(Board *board)
 		int msec = diff * 1000 / CLOCKS_PER_SEC;
 		printf("Time taken %d seconds %d milliseconds\n", msec/1000, msec%1000);
 		//printBoard(host_output[0]);
-		
+		*/
 		int sum = 0, last_idx;
-		for(int i = 0; i < 22 * 22 * 22 * 22; i++)
+		for(int i = 0; i < size; i++)
 		{
 			if(boardIsValid_host(&host_output[i]))
 			{
 				sum++;
 				last_idx = i;
+				printBoard(host_output[i]);
 			}
 		}
 		
