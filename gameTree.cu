@@ -67,6 +67,21 @@ do\
 __device__ Board outputBoard;
 __host__ __device__ void makeMoves(Board * boards, Turn turn, unsigned int tx);
 
+__host__ __device__ int ipow(int base, int exp)
+{
+	int result = 1;
+	while(exp)
+	{
+		if(exp & 1)
+		{
+			result *= base;
+		}
+		exp >>= 1;
+		base *= base;
+	}
+	return result;
+}
+
 __host__ __device__ bool boardEquality(const Board *a, const Board *b)
 {
 	for(int x = 0; x < 4; x++)
@@ -91,7 +106,7 @@ __device__ bool boardIsValid_device(const Board *a)
 {
 	return !boardEquality(a, &bad_board);
 }
-__device__ int analyseBoard(Board *board)
+__host__ __device__ int analyseBoard(Board *board)
 {
 	int score = 0;
 	int white_wins = 1;
@@ -460,7 +475,7 @@ void makeMoves(Board * boards, Turn turn, unsigned int tx)
 					move_idx++;
 					temp = b;
 				}
-				if(!(y%2) && x != 0 && !b.pieces[x-1][y-1])
+				if(!(y%2) && y != 0 && x != 0 && !b.pieces[x-1][y-1])
 				{
 					//printf("black at %d,%d move left\n", x, y);
 					temp.pieces[x-1][y-1] = temp.pieces[x][y];
@@ -618,11 +633,15 @@ int main(int argc, char **argv) {
 	initBoard(b);
 	for(int i = 0; i <100; i++)
 	{
+		clock_t start = clock(), diff;
 		makeMove(b);
 		if(i%2)
 		printBoard(b[0]);
 		reverse(b);
 		//printBoard(b[0]);
+		diff = clock() - start;
+		int msec = diff * 1000 / CLOCKS_PER_SEC;
+		//printf("Time taken %d seconds %d milliseconds\n", msec/1000, msec%1000);
 	}
 	
 }
@@ -843,10 +862,27 @@ int makeMove(Board *board)
 		return 0;
 	} else // iterative version
 	{
-		int numTurns;
-		std::cin >> numTurns;
-		unsigned long size = 1;
-		for(int i = 0; i < numTurns; i++, size *=484);
+		static int numTurns = 0;
+		int score = 0;
+		unsigned long size;
+		if(!numTurns)
+		{
+			std::cin >> numTurns;
+		}
+
+		
+		if(numTurns == 4)
+		{
+			size = ipow(512, 3);
+		} else if(numTurns <= 3)
+		{
+			size = ipow(512, numTurns);
+		} else
+		{
+			printf("max 4\n");
+			return -1;
+		}
+
 		host_output = new (std::nothrow) Board[size];
 		if(!host_output)
 		{
@@ -854,9 +890,8 @@ int makeMove(Board *board)
 			return -1;
 		}
 		host_output[0] = *board;
-		clock_t start = clock(), diff;
 
-		for(int i = 0; i < numTurns; i++)
+		for(int i = 0; i < numTurns && i < 3; i++)
 		{
 			Board *temp_output = new (std::nothrow) Board[size];
 			if(!temp_output)
@@ -865,66 +900,85 @@ int makeMove(Board *board)
 				return -1;
 			}
 
-			for( int j = 0; j < pow(484, i); j++)
+			for( int j = 0; j < ipow(512, i); j++)
 			{
 				if(!boardIsValid_host(&host_output[j]))
 				{
 					continue;
 				}
-				Board b[484] = {empty};
+				Board b[512] = {empty};
 				b[0] = host_output[j];
 				makeMoves(b, white, 0);
-				for(int k = 0; k < 484; k++)
+				for(int k = 0; k < 512; k++)
 				{
 					if(boardIsValid_host(&b[k]))
 					{
 						makeMoves(b, black, k);
 					}
-					temp_output[484 * j + k] = b[k];
+					temp_output[512 * j + k] = b[k];
 				}
 			}
 			delete[] host_output;
 			host_output = temp_output;
 		}
-		diff = clock() - start;
-		int msec = diff * 1000 / CLOCKS_PER_SEC;
-		printf("Time taken %d seconds %d milliseconds\n", msec/1000, msec%1000);
-		/*
-		makeMoves(host_output, turn, 0);
-		
-		turn = black;
-		for(int i = 0; i < 22; i++)
-		{
-			if(boardIsValid_host(&host_output[i]))
-			{
-				makeMoves(host_output, turn, i);
-			}
-		}
 
-		//printBoard(host_output[0]);
-		turn = white;
-		for(int i = 0; i < 22 * 22; i++)
+		if(numTurns > 3)
 		{
-			if(boardIsValid_host(&host_output[i]))
+			for(int i = 0; i < ipow(512,3); i++)
 			{
-				makeMoves(host_output, turn, i);
+				Board b[512] = {empty};
+				//Board *temp_output = new (std::nothrow) Board[ipow(512,2)];
+				b[0] = host_output[i];
+				makeMoves(b, white, 0);
+				for(int j = 0; j < 512; j+=22)
+				{
+					if(boardIsValid_host(&host_output[i]))
+					{
+						makeMoves(b, black, j);
+					}
+				}
+				for(int j = 0; j < 512; j++)
+				{
+					if(boardIsValid_host(&host_output[i]))
+					{
+						score = std::max(score, analyseBoard(&host_output[i]));
+					}
+				}
+				//delete[] temp_output;
 			}
-		}
-		
-		//printBoard(host_output[0]);
-		turn = black;
-		for(int i = 0; i < 22 * 22 * 22; i++)
+		} else
 		{
-			if(boardIsValid_host(&host_output[i]))
+			int * scores = new int[ipow(512,numTurns - 1)];
+			int max = 0, idx = -1;
+			for(int i = numTurns; i > 0; i--)
 			{
-				makeMoves(host_output, turn, i);
+				for(int j = 0; j < ipow(512,i); j++)
+				{
+					if(boardIsValid_host(&host_output[j]))
+					{
+						score = std::max(score, analyseBoard(&host_output[i]));
+					}
+					if(!(j % 512))
+					{
+						scores[j/512] = score;
+						if(score > max)
+						{
+							max = score;
+							idx = j/512;
+						}
+						score = 0;
+					}
+				}
 			}
+			//printf("%d, %d\n", max, idx);
+			Board boards[512];
+			boards[0] = board[0];
+			makeMoves(boards, white, 0);
+			board[0] = boards[0];
 		}
-		diff = clock() - start;
-		int msec = diff * 1000 / CLOCKS_PER_SEC;
-		printf("Time taken %d seconds %d milliseconds\n", msec/1000, msec%1000);
-		//printBoard(host_output[0]);
-		*/
+		//printf("Score: %d\n", score);
+		delete [] host_output;
+		/*	
 		int sum = 0, last_idx;
 		for(int i = 0; i < size; i++)
 		{
@@ -932,42 +986,16 @@ int makeMove(Board *board)
 			{
 				sum++;
 				last_idx = i;
-				printBoard(host_output[i]);
+				//printBoard(host_output[i]);
 			}
 		}
 		
 		printf("%d %d\n", sum, last_idx);
 		printBoard(host_output[last_idx]);
-		
+		*/
 		*board = host_output[0];
 	}
 	return 0;
 }
 
-int analyseBoard(Board *board, Turn player)
-{
-	int score = 0;
-	uint8_t pieceMin, pieceMax;
-	if(player == white)
-	{
-		pieceMin = white_reg;
-		pieceMax = white_king_moved;
-	} else
-	{
-		pieceMin = black_reg;
-		pieceMax = black_reg_moved;
-	}
 
-	for(int x = 0; x < 4; x++)
-	{
-		for(int y = 0; y < 8; y++)
-		{
-			Piece piece = board->pieces[x][y];
-			if(pieceMin <= piece && piece <= pieceMax)
-			{
-				score++;
-			}
-		}
-	}
-	return score;		
-}
